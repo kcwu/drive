@@ -29,6 +29,7 @@ import (
 	"code.google.com/p/goauth2/oauth"
 	"github.com/odeke-em/drive/config"
 	drive "github.com/odeke-em/google-api-go-client/drive/v2"
+	netcontext "golang.org/x/net/context"
 )
 
 const (
@@ -424,7 +425,11 @@ func (r *Remote) upsertByComparison(body io.Reader, args *upsertOpt) (f *File, e
 	if args.src.Id == "" {
 		req := r.service.Files.Insert(uploaded)
 		if !args.src.IsDir && body != nil {
-			req = req.Media(body)
+			if readerAt, ok := body.(io.ReaderAt); ok {
+				req = req.ResumableMedia(netcontext.TODO(), readerAt, args.src.Size, "")
+			} else {
+				req = req.Media(body)
+			}
 		}
 		if uploaded, err = req.Do(); err != nil {
 			return
@@ -454,10 +459,19 @@ func (r *Remote) upsertByComparison(body io.Reader, args *upsertOpt) (f *File, e
 	}
 
 	if !args.src.IsDir {
-		if args.dest == nil || args.nonStatable {
-			req = req.Media(body)
+		var needUpload bool
+		if args.nonStatable || args.dest == nil {
+			needUpload = true
 		} else if mask := fileDifferences(args.src, args.dest, args.ignoreChecksum); checksumDiffers(mask) {
-			req = req.Media(body)
+			needUpload = true
+		}
+
+		if needUpload {
+			if readerAt, ok := body.(io.ReaderAt); ok {
+				req = req.ResumableMedia(netcontext.TODO(), readerAt, args.src.Size, "")
+			} else {
+				req = req.Media(body)
+			}
 		}
 	}
 	if uploaded, err = req.Do(); err != nil {
